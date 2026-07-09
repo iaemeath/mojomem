@@ -1,0 +1,29 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Databases
+*.db
+*.db-journal
+*.db-wal
+
+# Environments
+.env
+.venv
+venv/
+ENV/
+
+# Large binaries/SDK downloads
+onnxruntime-win-x64-1.18.1.zip
+onnxruntime-linux-x64-1.18.1.tgz
+ort_sdk/
+onnxruntime-linux-x64-1.18.1/
+
+# Model files (too large for GitHub)
+bge-small-zh-v1.5-onnx/
+release/bge-small-zh-v1.5-onnx/
+
+# Local cache
+.cache/
+tmp/

@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "mojomem-memory-system": {
+      "command": "python",
+      "args": [
+        "mcp_server.py"
+      ],
+      "env": {
+        "PYTHONUTF8": "1"
+      }
+    }
+  }
+}
