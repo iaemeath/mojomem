@@ -1,13 +1,15 @@
 {
   "mcpServers": {
-    "QMem-memory-system": {
-      "command": "python",
+    "QMem-Windows-Python": {
+      "command": "cmd.exe",
       "args": [
-        "mcp_server.py"
-      ],
-      "env": {
-        "PYTHONUTF8": "1"
-      }
+        "/c",
+        "C:\\QMem\\python\\start_python_mcp.bat"
+      ]
+    },
+    "QMem-Linux-Mojo": {
+      "command": "/home/user/QMem/release/start_mcp.sh",
+      "args": []
     }
   }
 }
