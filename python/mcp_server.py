@@ -7,7 +7,8 @@ from init_project_context import ProjectContextProbe
 from cbm_wrapper import CBMWrapper
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
-DBPATH = os.path.join(_DIR, "core_memory.db")
+_ROOT = os.path.dirname(_DIR)
+DBPATH = os.path.join(_ROOT, "core_memory.db")
 
 # 需要确保存在的列（用于从旧版 schema 增量升级）
 _REQUIRED_COLUMNS = {

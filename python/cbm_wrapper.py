@@ -21,7 +21,8 @@ class CBMWrapper:
     def _detect_binary(self):
         """探测 codebase-memory-mcp 可执行文件位置：优先 QMem 目录内，其次 PATH。"""
         ext = ".exe" if os.name == "nt" else ""
-        local_bin = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"codebase-memory-mcp{ext}")
+        _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        local_bin = os.path.join(_ROOT, f"codebase-memory-mcp{ext}")
         if os.path.exists(local_bin):
             return local_bin
         return f"codebase-memory-mcp{ext}"

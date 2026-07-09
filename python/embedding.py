@@ -9,7 +9,10 @@ except ImportError:
     HAS_ONNX = False
 
 class BGEEmbedding:
-    def __init__(self, model_dir='bge-small-zh-v1.5-onnx'):
+    def __init__(self, model_dir=None):
+        if model_dir is None:
+            _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            model_dir = os.path.join(_ROOT, 'bge-small-zh-v1.5-onnx')
         self.model_dir = model_dir
         self.session = None
         self.tokenizer = None
