@@ -2,7 +2,7 @@ import subprocess
 import json
 
 p = subprocess.Popen(
-    ["./mcp_server"],
+    ["./mojomem_mcp"],
     stdin=subprocess.PIPE,
     stdout=subprocess.PIPE,
     stderr=subprocess.PIPE,
