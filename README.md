@@ -155,5 +155,71 @@ flowchart TB
 本项目的核心记忆表示设计和协议标准借鉴并致敬了开源项目 [codebase-memory](https://github.com/craws/codebase-memory)。
 
 我们的设计哲学为：
-- **极致的零运行时依赖**：抛弃了 Python 解释器的执行开销和 PyInstaller 的臃肿，以高性能的原生二进制运行。
 - **认知共生架构**：在底层数据库及向量架构中模拟人类脑部认知模式（短期工作记忆与长期情景记忆），增强模型的开发心智模型。
+
+---
+
+### 📦 初始化与依赖下载 (首次安装)
+
+如果需要在新机器上从头部署（特别是使用 Python 回退版本时），你需要下载嵌入模型和 ONNX Runtime 环境。为了保持仓库整洁，我们不提供独立的脚本，你可以直接运行以下 Python 代码完成初始化：
+
+#### 1. 下载 BGE 向量模型
+你需要安装 `huggingface_hub`。这会将模型下载到 `bge-small-zh-v1.5-onnx` 目录中。
+```python
+import os
+from huggingface_hub import snapshot_download
+
+# 使用 HF 镜像站加速下载 (国内网络)
+os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
+
+print("Downloading ONNX model from hf-mirror...")
+snapshot_download(
+    repo_id="Xenova/bge-small-zh-v1.5", 
+    local_dir="bge-small-zh-v1.5-onnx", 
+    local_dir_use_symlinks=False
+)
+print("✅ Download complete.")
+```
+
+#### 2. 下载 ONNX Runtime SDK (C/C++ FFI 需要)
+如果你需要自己编译 Linux 版或准备跨平台环境，可以运行以下代码下载并解压：
+```python
+import urllib.request
+import tarfile
+import os
+import shutil
+
+os.makedirs("ort_sdk", exist_ok=True)
+linux_url = "https://github.com/microsoft/onnxruntime/releases/download/v1.18.1/onnxruntime-linux-x64-1.18.1.tgz"
+linux_tgz = "onnxruntime-linux-x64-1.18.1.tgz"
+
+print("Downloading ONNX Runtime Linux x64 SDK...")
+if not os.path.exists(linux_tgz):
+    urllib.request.urlretrieve(linux_url, linux_tgz)
+
+print("Extracting...")
+with tarfile.open(linux_tgz, "r:gz") as tar:
+    tar.extractall("ort_sdk")
+
+extracted_dir = os.path.join("ort_sdk", "onnxruntime-linux-x64-1.18.1")
+target_dir = os.path.join("ort_sdk", "linux")
+if os.path.exists(extracted_dir):
+    if os.path.exists(target_dir):
+        shutil.rmtree(target_dir)
+    os.rename(extracted_dir, target_dir)
+print("✅ Linux SDK setup complete in ort_sdk/linux.")
+```
+
+---
+
+### 🐍 Python 回退版 (Windows / 跨平台)
+
+除了原生的 Mojo 实现（性能最佳，目前主要用于 Linux），本项目还提供了一套等效的 **Python 回退版**。这在 Mojo 暂未完全支持的平台（如原生 Windows）上非常有用。
+
+Python 版本的代码全部位于 `python/` 目录下。
+
+**启动方式：**
+- **Windows**: 双击或在配置中指定 `python/start_python_mcp.bat`
+- **Linux/macOS**: 执行 `python/start_python_mcp.sh`
+
+*注：由于 Windows 测试机正在使用该版本进行全面测试，请确保依赖的 `core_memory.db` 和 ONNX 模型在运行目录（如 `C:\QMem`）下存在，否则可能会触发错误。*
