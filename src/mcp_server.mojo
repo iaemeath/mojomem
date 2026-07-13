@@ -85,6 +85,9 @@ struct QMemMCP:
         self.db.exec("CREATE TRIGGER IF NOT EXISTS trg_fts_update AFTER UPDATE ON memory_facts BEGIN INSERT INTO memory_facts_fts(memory_facts_fts, rowid, title, content, topic_key, type, project) VALUES ('delete', old.id, old.title, old.content, old.topic_key, old.type, old.project); INSERT INTO memory_facts_fts(rowid, title, content, topic_key, type, project) VALUES (new.id, new.title, new.content, new.topic_key, new.type, new.project); END;")
         self.db.exec("CREATE TRIGGER IF NOT EXISTS trg_fts_delete AFTER DELETE ON memory_facts BEGIN INSERT INTO memory_facts_fts(memory_facts_fts, rowid, title, content, topic_key, type, project) VALUES ('delete', old.id, old.title, old.content, old.topic_key, old.type, old.project); END;")
         self.db.exec("CREATE TRIGGER IF NOT EXISTS trg_vector_delete AFTER DELETE ON memory_facts BEGIN DELETE FROM memory_vectors WHERE rowid = old.id; END;")
+        
+        # Async physical deletion space recovery
+        self.db.exec("VACUUM")
 
     fn embed(self, text: String) raises -> List[Float32]:
         var ids = self.tok.encode(text, 512)
@@ -389,10 +392,6 @@ struct QMemMCP:
         self.db.bind_text(stmt, 1, obs_id)
         _ = self.db.step(stmt)
         self.db.finalize(stmt)
-        
-        var stmt_vacuum = self.db.prepare("VACUUM")
-        _ = self.db.step(stmt_vacuum)
-        self.db.finalize(stmt_vacuum)
         
         return json_obj(json_kv_str("status", "deleted"), json_kv_str("obs_id", obs_id))
 
