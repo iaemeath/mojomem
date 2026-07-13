@@ -220,12 +220,15 @@ class QMemMCP:
 
     def _delete(self, args):
         obs_id = args.get("obs_id")
+        if not obs_id:
+            return {"error": "obs_id is required"}
         conn = self._get_conn()
-        conn.execute("UPDATE memory_facts SET deleted_at=CURRENT_TIMESTAMP WHERE obs_uuid=?", (obs_id,))
+        conn.execute("DELETE FROM memory_facts WHERE obs_uuid=?", (obs_id,))
         n = conn.total_changes
         conn.commit()
+        conn.execute("VACUUM")
         conn.close()
-        return {"soft_deleted": n}
+        return {"hard_deleted": n}
 
     def _promote(self, args):
         obs_id = args.get("obs_id")
