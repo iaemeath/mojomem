@@ -50,8 +50,7 @@ def main():
                            "min_similarity": args.min_sim})
         for r in res.get("results", []):
             print(f"\n  [{r.get('project', '?')}] <{r.get('topic_key', '')}> "
-                  f"global={'★' if r.get('is_global') else ' '} "
-                  f"sim={r.get('similarity', '?')}")
+                  f"sim={r.get('similarity', r.get('vec_dist', '?'))}")
             print(f"    {(r.get('title') or r.get('content', ''))[:80]}")
         print(f"\n  共 {res.get('count', 0)} 条")
 
