@@ -7,10 +7,9 @@
 - **当前现状**：目前的 Python 落地版没有去读取物理的 `.assets` 目录。我们通过 `memory_promote(obs_id)` 接口，给特定的 Q4 记录打上 `is_global=1` 的标签，直接让其在 SQLite（Q4存储介质）的向量空间里提权。这实际上**把 Q2 揉进了 Q4 的向量数据库里**，违背了物理切割介质的红线。
 - **优化方向**：`mem_recall` 接口需要新增分支逻辑。除了查询 Q4 数据库，当 query 命中 `.assets` 目录下的某物理文件名时，必须将该 MD 文件的纯文本内容无损读取并拼接到召回结果中。
 
-## 🔴 差距二：`mem_delete` 为软删除，残留脏数据
+## 🟢 差距二（已解决）：`mem_delete` 的物理清理与异步空间回收
 - **原版规范**：彻底抛弃只增不减（ADD-only），旧决策必须执行硬抹除（Hard Erase），底层触发器同步清理向量空间，并立即执行 `VACUUM` 整理磁盘碎片，保持单体数据库的极致轻量。
-- **当前现状**：Python 版的 `_delete` 接口执行的是软删除（`UPDATE memory_facts SET deleted_at=CURRENT_TIMESTAMP`），底层的触发器 (`trg_auto_vector_delete`) 未能被激活，向量库毫无缩减。
-- **优化方向**：将删除接口改造为真实的 `DELETE FROM memory_facts`，并附带执行 `VACUUM` 指令。*(注：当前 `mem_save` 实现的基于 `topic_key` 的 Upsert 语义覆盖已承担了部分遗忘修剪工作，降低了硬删除的频率)*。
+- **当前现状（v2.1）**：已完全修复。无论是 Python 还是 Mojo 版，`mem_delete` 接口现已执行真实的 `DELETE FROM memory_facts`，底层触发器（`trg_vector_delete` 和 `trg_fts_delete`）瞬间生效，立即无感抹除向量和全文检索索引，彻底解决向量污染问题。为避免高频删除导致 I/O 阻塞，`VACUUM` 碎片回收动作已从删除接口中剥离，被优化为在 MCP Server 启动生命周期（`_init` / `__init__`）中异步执行。
 
 ## 🟡 差距三：第三象限冷启动向导（`/init`）缺位
 - **原版规范**：在克隆新仓库后，人类执行 `/init` 指令，AI 会在全局红线潜意识下扫描项目，在当前根目录生成 `CLAUDE.md`（Q3 户口本），并自动在文件末尾追加对第二象限的物理指针（例如：`Ref: ../.assets/vue2-common.md`）。

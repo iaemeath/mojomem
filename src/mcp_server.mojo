@@ -197,7 +197,7 @@ struct QMemMCP:
 
         tools.append(json_obj(
             json_kv_str("name", "mem_delete"),
-            json_kv_str("description", "Soft delete memory by obs_id"),
+            json_kv_str("description", "Hard delete memory by obs_id and wipe vector index"),
             json_kv("inputSchema", json_obj(
                 json_kv_str("type", "object"),
                 json_kv("properties", json_obj(
