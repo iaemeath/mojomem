@@ -119,11 +119,11 @@ Configure your MCP Client (e.g., Claude Desktop) to point to the `release/start_
 ```text
                         【 作用范围：全局公共 (Global) 】
                                          │
-        第一象限：【全局环境红线·静态】         │   第二象限：【项目群公共资产·动态】
+        第一象限：【全局环境红线·静态】         │   第二象限：【跨项目共识域·动态】
         (内网私服、总网关、全局安全硬指标)     │   (跨项目可复用的高阶解决方案、避坑Pattern)
         ───────────────────────────────  │   ────────────────────────────────────────
-        载体：D:\code\CLAUDE.md          │   载体：D:\code\.assets\*.md 模块化文件
-        模式：Push (被动强制注入)          │   模式：Semi-Push / 显式 Pull 召回
+        载体：D:\code\CLAUDE.md          │   载体：单库 SQLite (tier='consensus')
+        模式：Push (被动强制注入)          │   模式：Pull (mem_context / search_rrf 自动加载)
                                          │
  ─────────────────────────────────────────┼─────────────────────────────────────────►【 变动频率 】
   (几乎不改，启动即常驻)                   │                  (随开发动态增量写入)
@@ -146,16 +146,15 @@ Configure your MCP Client (e.g., Claude Desktop) to point to the `release/start_
    - LLM 发现重要决策、Bug 修复或重构知识时，通过 `mem_save` 或 `mem_update` 主动写入第四象限。
    - 对指定的主题（Topic Key）进行自动覆盖更新 (Upsert)。
 2. **拉取 (Pull / 语义召回)**:
-   - 检索时执行 RRF 混合检索算法，同时检索 FTS5 全文索引与 ONNX 向量相似度，并在此基础上对第二象限（全局共识/置顶记忆）进行加权提升。
+   - 检索时执行 RRF 混合检索算法，同时检索 FTS5 全文索引与 ONNX 向量相似度，执行"三步法配额截取"（保障 q4 与 consensus 记录的安全边界），统一在单个 rank 空间内混合召回。
 3. **查询 (Query / 探测与列表)**:
-   - 静态分析目录特征（Git Remote / Pom 描述），动态生成第三象限结构上下文，支持按域（`project`、`personal`）和类型精细化过滤查询。
+   - 动态生成项目上下文 `mem_context`，并自动加载通过 `project_refs` 引用的共识域（Virtual Refs），无需手动查阅字典。
 
 ---
 
-### 🛠️ 技术栈
-- **编译器**：Mojo 0.26.2 (原生 C 兼容编译，零 Python 依赖)。
-- **推理引擎**：ONNX Runtime (BGE-Small-ZH-v1.5) 通过 FFI 动态加载。
-- **数据库**：SQLite3，结合 FTS5 与 `sqlite-vec` 扩展提供原生的全文检索与向量余弦相似度计算。
+### 🛠️ 技术栈与 V3.0 架构
+- **核心代理 (Hybrid Proxy)**：V3.0 (方案 10.1) 启用了混合代理架构。Mojo 负责底层极致冷启动的 SQLite FFI (`vec0`, `fts5`) 与 ONNX Runtime (BGE-Small-ZH-v1.5) 加载，而复杂的业务防腐层、RRF 排序、越权防护与脐带检查则安全地通过 Python FFI 透传给 Python 运行时处理。
+- **数据库**：SQLite3，单表架构 (`memory_facts`)，通过 `tier` 字段与 `project_refs` 表实现极简的物理隔离与逻辑引用，彻底解决上下文垃圾场问题。
 
 ---
 
