@@ -73,7 +73,17 @@ class QMemMCP:
         with open(os.path.join(_DIR, "schema.sql"), encoding="utf-8") as f:
             conn.executescript(f.read())
         self._migrate_schema(conn)
-        
+
+        # 一次性迁移：清除旧版残留的 is_global 列（已废弃，promote 改走 skill 文件物理隔离）
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(memory_facts)").fetchall()}
+        if "is_global" in cols:
+            try:
+                conn.execute("DROP INDEX IF EXISTS idx_facts_global")
+                conn.execute("ALTER TABLE memory_facts DROP COLUMN is_global")
+                print("[init] dropped legacy column is_global", file=sys.stderr)
+            except Exception as e:
+                print(f"[init] is_global drop skipped: {e}", file=sys.stderr)
+
         # Async physical deletion space recovery
         try:
             conn.execute("VACUUM")
@@ -81,17 +91,17 @@ class QMemMCP:
             print(f"[init] vacuum failed: {e}", file=sys.stderr)
             
         conn.close()
-        return {"protocolVersion": "2024-11-05", "serverInfo": {"name": "qmem-mcp", "version": "2.1"}, "capabilities": {"tools": {}}}
+        return {"protocolVersion": "2024-11-05", "serverInfo": {"name": "qmem-mcp", "version": "2.2"}, "capabilities": {"tools": {}}}
 
     def _tools_list(self):
         local_tools = [
             {"name": "mem_save", "description": "保存记忆（Push）。支持 title/type/scope/topic_key，topic_key 命中时自动 upsert。", "inputSchema": {"type": "object", "properties": {"project_id": {"type": "string"}, "topic_key": {"type": "string"}, "content": {"type": "string"}, "title": {"type": "string"}, "type": {"type": "string", "enum": ["decision", "bugfix", "reference", "learning", "manual"]}, "scope": {"type": "string", "enum": ["project", "personal"]}}, "required": ["project_id", "content"]}},
-            {"name": "mem_recall", "description": "RRF 混合检索（Pull）：FTS5 词法 + 向量语义融合排序，is_global 条目 boost。", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "current_project": {"type": "string"}, "min_similarity": {"type": "number", "default": 0.5}, "limit": {"type": "integer", "default": 10}}, "required": ["query"]}},
+            {"name": "mem_recall", "description": "RRF 混合检索（Pull）：FTS5 词法 + 向量语义融合排序。", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "current_project": {"type": "string"}, "min_similarity": {"type": "number", "default": 0.5}, "limit": {"type": "integer", "default": 10}}, "required": ["query"]}},
             {"name": "mem_search", "description": "精确/过滤查找：按 project/type/scope 过滤 + 关键词 FTS5 MATCH。", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "project": {"type": "string"}, "type": {"type": "string"}, "scope": {"type": "string"}, "limit": {"type": "integer", "default": 20}}, "required": []}},
             {"name": "mem_update", "description": "按 obs_id 局部更新（content/title/type），自动重算向量。", "inputSchema": {"type": "object", "properties": {"obs_id": {"type": "string"}, "content": {"type": "string"}, "title": {"type": "string"}, "type": {"type": "string"}}, "required": ["obs_id"]}},
             {"name": "mem_context", "description": "开场召回：按 project 返回最近 N 条 + pinned 优先。", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}, "limit": {"type": "integer", "default": 10}}, "required": ["project"]}},
             {"name": "mem_delete", "description": "彻底硬删除记忆及向量索引，立即生效。", "inputSchema": {"type": "object", "properties": {"obs_id": {"type": "string"}}, "required": ["obs_id"]}},
-            {"name": "memory_promote", "description": "将本条经验提炼并抽取到全局 Q2 Skill (部分项目共识) 中，实现物理隔离。", "inputSchema": {"type": "object", "properties": {"obs_id": {"type": "string"}}, "required": ["obs_id"]}},
+            {"name": "memory_promote", "description": "将经验按 project 抽取到全局 Q2 Skill 路由（~/.agents/skills/q2-consensus/），实现物理隔离。", "inputSchema": {"type": "object", "properties": {"obs_id": {"type": "string"}}, "required": ["obs_id"]}},
             {"name": "mem_list_projects", "description": "列出所有 project 及其记忆数。", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "init_project_context", "description": "探测目录身份线索（git remote/pom/package.json），生成 Q3 户口本。", "inputSchema": {"type": "object", "properties": {"directory": {"type": "string"}}, "required": ["directory"]}},
         ]
@@ -240,41 +250,79 @@ class QMemMCP:
         obs_id = args.get("obs_id")
         if not obs_id:
             return {"error": "obs_id is required"}
-            
+
         conn = self._get_conn()
-        row = conn.execute("SELECT title, content FROM memory_facts WHERE obs_uuid=?", (obs_id,)).fetchone()
+        row = conn.execute("SELECT title, content, project FROM memory_facts WHERE obs_uuid=?", (obs_id,)).fetchone()
         if not row:
             conn.close()
             return {"error": "observation not found"}
-            
+
         title = row["title"]
         content = row["content"]
-        
-        # 物理写入全局 ~/.agents/skills/q2-consensus/SKILL.md
+        project = row["project"] or "misc"
+
         skill_dir = os.path.expanduser("~/.agents/skills/q2-consensus")
-        os.makedirs(skill_dir, exist_ok=True)
-        skill_file = os.path.join(skill_dir, "SKILL.md")
-        
-        is_new = not os.path.exists(skill_file)
-        already_exists = False
-        if not is_new:
-            with open(skill_file, "r", encoding="utf-8") as f:
-                existing_text = f.read()
-                if f"## {title}" in existing_text and content in existing_text:
-                    already_exists = True
-        
-        if not already_exists:
-            with open(skill_file, "a", encoding="utf-8") as f:
-                if is_new:
-                    f.write("---\nname: q2-consensus\ndescription: 部分项目共识\n---\n\n")
-                f.write(f"## {title}\n\n{content}\n\n")
-            
-        # 物理硬删除原始记录，完成绝对隔离
-        conn.execute("DELETE FROM memory_facts WHERE obs_uuid=?", (obs_id,))
-        n = conn.total_changes
-        conn.commit()
-        conn.close()
-        return {"promoted_to_skill": skill_file, "hard_deleted": n, "appended": not already_exists}
+        project_file = os.path.join(skill_dir, f"{project}.md")
+
+        try:
+            conn.execute("BEGIN IMMEDIATE TRANSACTION")
+            # 先软删：崩溃时记忆不丢（deleted_at 恢复靠 ROLLBACK）
+            conn.execute("UPDATE memory_facts SET deleted_at=CURRENT_TIMESTAMP WHERE obs_uuid=?", (obs_id,))
+            conn.commit()  # 释放事务锁，文件 IO 不放事务内
+
+            # 1. 写项目共识文件（追加 + 去重）
+            os.makedirs(skill_dir, exist_ok=True)
+            is_new = not os.path.exists(project_file)
+            already_exists = False
+            if not is_new:
+                with open(project_file, "r", encoding="utf-8") as f:
+                    existing_text = f.read()
+                    if f"## {title}" in existing_text and content in existing_text:
+                        already_exists = True
+
+            if not already_exists:
+                with open(project_file, "a", encoding="utf-8") as f:
+                    if is_new:
+                        f.write(f"# {project} 共识\n\n")
+                    f.write(f"## {title}\n\n{content}\n\n")
+
+            # 2. 重建路由 SKILL.md（扫描所有 .md，全量重写索引）
+            self._rebuild_router_skill(skill_dir)
+
+            # 3. 文件写入成功 → 硬删 DB 原始记录
+            conn.execute("DELETE FROM memory_facts WHERE obs_uuid=?", (obs_id,))
+            n = conn.total_changes
+            conn.commit()
+            conn.close()
+            return {"promoted_to": project_file, "router": os.path.join(skill_dir, "SKILL.md"),
+                    "hard_deleted": n, "appended": not already_exists, "project": project}
+        except Exception as e:
+            # 回滚软删：记忆恢复存活
+            conn.execute("UPDATE memory_facts SET deleted_at=NULL WHERE obs_uuid=?", (obs_id,))
+            conn.commit()
+            conn.close()
+            return {"error": f"promote failed, rolled back: {e}"}
+
+    def _rebuild_router_skill(self, skill_dir):
+        """扫描 skill_dir 下所有 <project>.md，全量重建路由 SKILL.md 索引。"""
+        files = sorted(f[:-3] for f in os.listdir(skill_dir) if f.endswith(".md") and f != "SKILL.md")
+        lines = ['---',
+                 'name: q2-consensus',
+                 'description: "Use when 新会话开场。跨项目共识知识库（踩坑根因/架构决策/框架陷阱/跨会话经验），按 project 分文件存储。新会话开场必读本 skill，再按当前 project 读取对应共识文件。触发场景：新会话开始、mem_context 召回后、用户问有什么坑/共识/之前的经验/踩过什么雷。"',
+                 '---',
+                 '',
+                 '# Q2 跨项目共识路由',
+                 '',
+                 '新会话开场必读。根据当前 project 读取对应共识文件：',
+                 '',
+                 '$SkillRoot = "C:\\Users\\Administrator\\.agents\\skills\\q2-consensus"',
+                 '']
+        for proj in files:
+            lines.append(f'# {proj}')
+            lines.append(f'Read "$SkillRoot\\{proj}.md"')
+            lines.append('')
+        with open(os.path.join(skill_dir, "SKILL.md"), "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
 
     # ==================== 读取 ====================
 
