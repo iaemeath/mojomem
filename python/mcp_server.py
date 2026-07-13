@@ -91,7 +91,7 @@ class QMemMCP:
             {"name": "mem_update", "description": "按 obs_id 局部更新（content/title/type），自动重算向量。", "inputSchema": {"type": "object", "properties": {"obs_id": {"type": "string"}, "content": {"type": "string"}, "title": {"type": "string"}, "type": {"type": "string"}}, "required": ["obs_id"]}},
             {"name": "mem_context", "description": "开场召回：按 project 返回最近 N 条 + pinned 优先。", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}, "limit": {"type": "integer", "default": 10}}, "required": ["project"]}},
             {"name": "mem_delete", "description": "彻底硬删除记忆及向量索引，立即生效。", "inputSchema": {"type": "object", "properties": {"obs_id": {"type": "string"}}, "required": ["obs_id"]}},
-            {"name": "memory_promote", "description": "将本条经验提炼并抽取到物理的 Q2 Skill (项目共识) 中，实现物理隔离。", "inputSchema": {"type": "object", "properties": {"obs_id": {"type": "string"}, "project_path": {"type": "string", "description": "目标项目根目录的绝对路径，用于写入 .agents/skills/"}}, "required": ["obs_id", "project_path"]}},
+            {"name": "memory_promote", "description": "将本条经验提炼并抽取到全局 Q2 Skill (部分项目共识) 中，实现物理隔离。", "inputSchema": {"type": "object", "properties": {"obs_id": {"type": "string"}}, "required": ["obs_id"]}},
             {"name": "mem_list_projects", "description": "列出所有 project 及其记忆数。", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "init_project_context", "description": "探测目录身份线索（git remote/pom/package.json），生成 Q3 户口本。", "inputSchema": {"type": "object", "properties": {"directory": {"type": "string"}}, "required": ["directory"]}},
         ]
@@ -238,9 +238,8 @@ class QMemMCP:
 
     def _promote(self, args):
         obs_id = args.get("obs_id")
-        project_path = args.get("project_path")
-        if not obs_id or not project_path:
-            return {"error": "obs_id and project_path are required"}
+        if not obs_id:
+            return {"error": "obs_id is required"}
             
         conn = self._get_conn()
         row = conn.execute("SELECT title, content FROM memory_facts WHERE obs_uuid=?", (obs_id,)).fetchone()
@@ -251,23 +250,31 @@ class QMemMCP:
         title = row["title"]
         content = row["content"]
         
-        # 物理写入 .agents/skills/q2-consensus/SKILL.md
-        skill_dir = os.path.join(project_path, ".agents", "skills", "q2-consensus")
+        # 物理写入全局 ~/.agents/skills/q2-consensus/SKILL.md
+        skill_dir = os.path.expanduser("~/.agents/skills/q2-consensus")
         os.makedirs(skill_dir, exist_ok=True)
         skill_file = os.path.join(skill_dir, "SKILL.md")
         
         is_new = not os.path.exists(skill_file)
-        with open(skill_file, "a", encoding="utf-8") as f:
-            if is_new:
-                f.write("---\nname: q2-consensus\ndescription: 项目级别全局共识与架构经验\n---\n\n# Q2 全局共识库\n\n此文件用于记录项目中跨模块的、具有深远影响的全局共识和踩坑经验。\n\n")
-            f.write(f"## {title}\n\n{content}\n\n")
+        already_exists = False
+        if not is_new:
+            with open(skill_file, "r", encoding="utf-8") as f:
+                existing_text = f.read()
+                if f"## {title}" in existing_text and content in existing_text:
+                    already_exists = True
+        
+        if not already_exists:
+            with open(skill_file, "a", encoding="utf-8") as f:
+                if is_new:
+                    f.write("---\nname: q2-consensus\ndescription: 部分项目共识\n---\n\n")
+                f.write(f"## {title}\n\n{content}\n\n")
             
         # 物理硬删除原始记录，完成绝对隔离
         conn.execute("DELETE FROM memory_facts WHERE obs_uuid=?", (obs_id,))
         n = conn.total_changes
         conn.commit()
         conn.close()
-        return {"promoted_to_skill": skill_file, "hard_deleted": n}
+        return {"promoted_to_skill": skill_file, "hard_deleted": n, "appended": not already_exists}
 
     # ==================== 读取 ====================
 
@@ -289,7 +296,7 @@ class QMemMCP:
         conn = self._get_conn()
         # 无 query → 纯过滤列表
         if not query:
-            sql = "SELECT obs_uuid, project, topic_key, title, type, scope, is_global, created_at FROM memory_facts WHERE deleted_at IS NULL"
+            sql = "SELECT obs_uuid, project, topic_key, title, type, scope, created_at FROM memory_facts WHERE deleted_at IS NULL"
             params = []
             if project: sql += " AND project=?"; params.append(project)
             if obs_type: sql += " AND type=?"; params.append(obs_type)
@@ -300,7 +307,7 @@ class QMemMCP:
             return {"results": [dict(r) for r in rows], "count": len(rows)}
         # 有 query → FTS5 MATCH + 过滤
         safe = query.replace('"', '""')
-        sql = ("SELECT mf.obs_uuid, mf.project, mf.topic_key, mf.title, mf.content, mf.type, mf.scope, mf.is_global, mf.created_at "
+        sql = ("SELECT mf.obs_uuid, mf.project, mf.topic_key, mf.title, mf.content, mf.type, mf.scope, mf.created_at "
                "FROM memory_facts_fts JOIN memory_facts mf ON mf.id = memory_facts_fts.rowid "
                "WHERE memory_facts_fts MATCH ? AND mf.deleted_at IS NULL")
         params = [f'"{safe}"']
@@ -314,7 +321,7 @@ class QMemMCP:
         except Exception:
             # FTS5 失败降级 LIKE
             p = f"%{query}%"
-            sql = ("SELECT obs_uuid, project, topic_key, title, content, type, scope, is_global, created_at "
+            sql = ("SELECT obs_uuid, project, topic_key, title, content, type, scope, created_at "
                    "FROM memory_facts WHERE (content LIKE ? OR title LIKE ?) AND deleted_at IS NULL")
             params = [p, p]
             if project: sql += " AND project=?"; params.append(project)
@@ -330,7 +337,7 @@ class QMemMCP:
         project = args.get("project")
         limit = int(args.get("limit", 10))
         conn = self._get_conn()
-        sql = ("SELECT obs_uuid, project, topic_key, title, content, type, is_global, pinned, created_at "
+        sql = ("SELECT obs_uuid, project, topic_key, title, content, type, pinned, created_at "
                "FROM memory_facts WHERE deleted_at IS NULL AND project=? "
                "ORDER BY pinned DESC, created_at DESC LIMIT ?")
         rows = conn.execute(sql, (project, limit)).fetchall()

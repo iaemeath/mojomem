@@ -12,7 +12,6 @@ CREATE TABLE IF NOT EXISTS memory_facts (
     content TEXT NOT NULL,
     type TEXT DEFAULT 'manual',              -- decision/bugfix/reference/learning/manual/...
     scope TEXT NOT NULL DEFAULT 'project',   -- project/personal
-    is_global INTEGER NOT NULL DEFAULT 0,    -- Q2 全局共识标记（memory_promote）
     content_hash TEXT DEFAULT '',            -- sha256(title+content)[:16]，变更检测
     session_id TEXT DEFAULT '',
     pinned INTEGER NOT NULL DEFAULT 0,       -- 置顶（开场必读）
@@ -91,7 +90,6 @@ END;
 -- ============================================================
 CREATE INDEX IF NOT EXISTS idx_facts_project ON memory_facts(project);
 CREATE INDEX IF NOT EXISTS idx_facts_topic ON memory_facts(topic_key);
-CREATE INDEX IF NOT EXISTS idx_facts_global ON memory_facts(is_global);
 CREATE INDEX IF NOT EXISTS idx_facts_type ON memory_facts(type);
 CREATE INDEX IF NOT EXISTS idx_facts_scope ON memory_facts(scope);
 CREATE INDEX IF NOT EXISTS idx_facts_deleted ON memory_facts(deleted_at);
