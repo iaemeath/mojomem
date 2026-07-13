@@ -73,6 +73,13 @@ class QMemMCP:
         with open(os.path.join(_DIR, "schema.sql"), encoding="utf-8") as f:
             conn.executescript(f.read())
         self._migrate_schema(conn)
+        
+        # Async physical deletion space recovery
+        try:
+            conn.execute("VACUUM")
+        except Exception as e:
+            print(f"[init] vacuum failed: {e}", file=sys.stderr)
+            
         conn.close()
         return {"protocolVersion": "2024-11-05", "serverInfo": {"name": "qmem-mcp", "version": "2.1"}, "capabilities": {"tools": {}}}
 
@@ -226,7 +233,6 @@ class QMemMCP:
         conn.execute("DELETE FROM memory_facts WHERE obs_uuid=?", (obs_id,))
         n = conn.total_changes
         conn.commit()
-        conn.execute("VACUUM")
         conn.close()
         return {"hard_deleted": n}
 
