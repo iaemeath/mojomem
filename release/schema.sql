@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS memory_facts (
     obs_uuid TEXT UNIQUE NOT NULL,
     project TEXT NOT NULL DEFAULT '',
     topic_key TEXT DEFAULT '',
+    tier TEXT NOT NULL DEFAULT 'q4',
     title TEXT DEFAULT '',
     content TEXT NOT NULL,
     type TEXT DEFAULT 'manual',              -- decision/bugfix/reference/learning/manual/...
@@ -92,6 +93,7 @@ CREATE INDEX IF NOT EXISTS idx_facts_project ON memory_facts(project);
 CREATE INDEX IF NOT EXISTS idx_facts_topic ON memory_facts(topic_key);
 CREATE INDEX IF NOT EXISTS idx_facts_type ON memory_facts(type);
 CREATE INDEX IF NOT EXISTS idx_facts_scope ON memory_facts(scope);
+CREATE INDEX IF NOT EXISTS idx_facts_tier ON memory_facts(tier);
 CREATE INDEX IF NOT EXISTS idx_facts_deleted ON memory_facts(deleted_at);
 CREATE INDEX IF NOT EXISTS idx_facts_created ON memory_facts(created_at);
 CREATE INDEX IF NOT EXISTS idx_facts_pinned ON memory_facts(pinned);
