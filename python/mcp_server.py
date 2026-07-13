@@ -101,7 +101,7 @@ class QMemMCP:
             {"name": "mem_update", "description": "按 obs_id 局部更新（content/title/type），自动重算向量。", "inputSchema": {"type": "object", "properties": {"obs_id": {"type": "string"}, "content": {"type": "string"}, "title": {"type": "string"}, "type": {"type": "string"}}, "required": ["obs_id"]}},
             {"name": "mem_context", "description": "开场召回：按 project 返回最近 N 条 + pinned 优先。", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}, "limit": {"type": "integer", "default": 10}}, "required": ["project"]}},
             {"name": "mem_delete", "description": "彻底硬删除记忆及向量索引，立即生效。", "inputSchema": {"type": "object", "properties": {"obs_id": {"type": "string"}}, "required": ["obs_id"]}},
-            {"name": "memory_promote", "description": "将经验按 project 抽取到全局 Q2 Skill 路由（~/.agents/skills/q2-consensus/），实现物理隔离。", "inputSchema": {"type": "object", "properties": {"obs_id": {"type": "string"}}, "required": ["obs_id"]}},
+            {"name": "memory_promote", "description": "将经验按 project 抽取到全局 Q2 Skill 路由（~/.agents/skills/q2-consensus/），实现物理隔离。label 为该 project 的人类可读标签（如'弱口令改造'），会写入路由 description 供 AI 匹配。", "inputSchema": {"type": "object", "properties": {"obs_id": {"type": "string"}, "label": {"type": "string", "description": "人类可读标签，如'弱口令改造6系统跨系统教训'，用于路由 description"}}, "required": ["obs_id", "label"]}},
             {"name": "mem_list_projects", "description": "列出所有 project 及其记忆数。", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "init_project_context", "description": "探测目录身份线索（git remote/pom/package.json），生成 Q3 户口本。", "inputSchema": {"type": "object", "properties": {"directory": {"type": "string"}}, "required": ["directory"]}},
         ]
@@ -248,8 +248,11 @@ class QMemMCP:
 
     def _promote(self, args):
         obs_id = args.get("obs_id")
+        label = args.get("label", "")
         if not obs_id:
             return {"error": "obs_id is required"}
+        if not label:
+            return {"error": "label is required (human-readable tag for router description)"}
 
         conn = self._get_conn()
         row = conn.execute("SELECT title, content, project FROM memory_facts WHERE obs_uuid=?", (obs_id,)).fetchone()
@@ -283,7 +286,8 @@ class QMemMCP:
             if not already_exists:
                 with open(project_file, "a", encoding="utf-8") as f:
                     if is_new:
-                        f.write(f"# {project} 共识\n\n")
+                        f.write(f"<!-- label:{label} -->\n")
+                        f.write(f"# {label}\n\n")
                     f.write(f"## {title}\n\n{content}\n\n")
 
             # 2. 重建路由 SKILL.md（扫描所有 .md，全量重写索引）
@@ -304,21 +308,43 @@ class QMemMCP:
             return {"error": f"promote failed, rolled back: {e}"}
 
     def _rebuild_router_skill(self, skill_dir):
-        """扫描 skill_dir 下所有 <project>.md，全量重建路由 SKILL.md 索引。"""
-        files = sorted(f[:-3] for f in os.listdir(skill_dir) if f.endswith(".md") and f != "SKILL.md")
+        """扫描 skill_dir 下所有 <project>.md，全量重建路由 SKILL.md 索引。
+        description 动态生成：从每个文件的 <!-- label:... --> 注释读出人类可读标签，
+        让 AI 看到标签就知道是否与当前任务相关。
+        """
+        import re
+        md_files = sorted(f for f in os.listdir(skill_dir) if f.endswith(".md") and f != "SKILL.md")
+        labels = []
+        for fname in md_files:
+            fpath = os.path.join(skill_dir, fname)
+            label = fname[:-3]  # 降级：无注释时用文件名
+            try:
+                with open(fpath, "r", encoding="utf-8") as f:
+                    head = f.read(500)
+                    m = re.search(r"<!-- label:(.*?) -->", head)
+                    if m:
+                        label = m.group(1).strip()
+            except Exception:
+                pass
+            labels.append((fname[:-3], label))
+
+        label_list = "、".join(l for _, l in labels) if labels else "（暂无）"
+        desc = (f"Use when 需要查阅项目共识/踩坑经验/架构决策。当前覆盖：{label_list}。"
+                f"跨会话共识知识库，按 project 分文件存储，每次 promote 后自动更新。"
+                f"触发场景：编码前查阅项目陷阱、用户问有什么坑/共识/之前的经验/踩过什么雷。")
         lines = ['---',
                  'name: q2-consensus',
-                 'description: "Use when 新会话开场。跨项目共识知识库（踩坑根因/架构决策/框架陷阱/跨会话经验），按 project 分文件存储。新会话开场必读本 skill，再按当前 project 读取对应共识文件。触发场景：新会话开始、mem_context 召回后、用户问有什么坑/共识/之前的经验/踩过什么雷。"',
+                 f'description: "{desc}"',
                  '---',
                  '',
                  '# Q2 跨项目共识路由',
                  '',
-                 '新会话开场必读。根据当前 project 读取对应共识文件：',
+                 '按需加载。根据当前 project 读取对应共识文件（本索引随 promote 自动更新）：',
                  '',
                  '$SkillRoot = "C:\\Users\\Administrator\\.agents\\skills\\q2-consensus"',
                  '']
-        for proj in files:
-            lines.append(f'# {proj}')
+        for proj, label in labels:
+            lines.append(f'# {label}')
             lines.append(f'Read "$SkillRoot\\{proj}.md"')
             lines.append('')
         with open(os.path.join(skill_dir, "SKILL.md"), "w", encoding="utf-8") as f:
