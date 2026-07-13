@@ -385,10 +385,15 @@ struct QMemMCP:
         return json_obj(json_kv("projects", json_arr(results)))
 
     fn _delete(mut self, obs_id: String) raises -> String:
-        var stmt = self.db.prepare("UPDATE memory_facts SET deleted_at=CURRENT_TIMESTAMP WHERE obs_uuid=?")
+        var stmt = self.db.prepare("DELETE FROM memory_facts WHERE obs_uuid=?")
         self.db.bind_text(stmt, 1, obs_id)
         _ = self.db.step(stmt)
         self.db.finalize(stmt)
+        
+        var stmt_vacuum = self.db.prepare("VACUUM")
+        _ = self.db.step(stmt_vacuum)
+        self.db.finalize(stmt_vacuum)
+        
         return json_obj(json_kv_str("status", "deleted"), json_kv_str("obs_id", obs_id))
 
     fn _promote(mut self, obs_id: String) raises -> String:
