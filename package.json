@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@zcode/qmem-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "description": "跨会话 AI 记忆系统插件（便携版）：MCP server（mem_save/mem_recall/consensus 等）+ skill 使用手册 + 本地 embedding 模型 + CBM 代码图谱引擎。"
+}

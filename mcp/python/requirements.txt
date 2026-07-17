@@ -3,6 +3,3 @@ onnxruntime>=1.24.4
 numpy
 tokenizers
 huggingface-hub
-tree-sitter>=0.22.0
-tree-sitter-python
-tree-sitter-javascript

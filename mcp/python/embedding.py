@@ -22,9 +22,7 @@ class BGEEmbedding:
         if not HAS_ONNX:
             print("WARNING: onnxruntime/tokenizers not installed, mocking embeddings", file=sys.stderr)
             return
-        onnx_path = os.path.join(self.model_dir, "onnx", "model_uint8.onnx")
-        if not os.path.exists(onnx_path):
-            onnx_path = os.path.join(self.model_dir, "onnx", "model.onnx")
+        onnx_path = os.path.join(self.model_dir, "onnx", "model.onnx")
         tok_path = os.path.join(self.model_dir, "tokenizer.json")
         if os.path.exists(onnx_path) and os.path.exists(tok_path):
             print(f'Loading model: {onnx_path}', file=sys.stderr)

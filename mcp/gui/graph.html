@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QMem 引用图谱</title>
+<link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+
+<header>
+  <span class="brand">QMem 记忆浏览器</span>
+  <span id="navMount"></span>
+  <div class="stat-chips" id="statChips"></div>
+</header>
+
+<div class="graph-page">
+  <!-- 工具栏 -->
+  <div class="graph-toolbar">
+    <button class="btn" id="reLayoutBtn"><span class="icon">⟳</span> 重新布局</button>
+    <button class="btn" id="toggleSimBtn"><span class="icon">⏸</span> <span id="simLabel">暂停仿真</span></button>
+    <div class="graph-legend">
+      <span><span class="legend-dot" style="background:#3b82f6"></span>项目</span>
+      <span><span class="legend-dot" style="background:#f59e0b"></span>共识域</span>
+      <span><span class="legend-line" style="border-color:#94a3b8"></span>promote 引用</span>
+      <span><span class="legend-line" style="border-top-style:dashed;border-color:#94a3b8"></span>manual 引用</span>
+    </div>
+    <span class="hint">提示：拖拽节点 · 点击查看详情 · 滚轮缩放 · 拖拽空白平移</span>
+  </div>
+
+  <!-- 画布 + 详情面板 -->
+  <div class="graph-stage" id="graphStage">
+    <canvas id="graphCanvas"></canvas>
+    <div class="graph-detail" id="detailPanel">
+      <span class="dt-close" id="detailClose">×</span>
+      <div id="detailContent"></div>
+    </div>
+  </div>
+</div>
+
+<script src="/assets/common.js"></script>
+<script>
+// ── 数据 ──
+let graphData = null;
+
+// ── 仿真状态 ──
+const sim = {
+  nodes: [], edges: [], nodeMap: {},
+  running: true, animId: null,
+  scale: 1, offsetX: 0, offsetY: 0,
+  hoverNode: null, dragNode: null,
+  // 力参数
+  REPULSION: 1200, SPRING: 0.03, SPRING_LEN: 110, DAMP: 0.82, CENTER: 0.004,
+};
+
+const canvas = document.getElementById('graphCanvas');
+const ctx = canvas.getContext('2d');
+
+// ── 初始化 ──
+async function init() {
+  document.getElementById('navMount').innerHTML = renderNav('graph');
+  graphData = await fetchJSON('/api/graph');
+  // 顶栏统计
+  const stats = await fetchJSON('/api/stats');
+  const cons = (stats.tier.find(x => x.k === 'consensus') || {}).n || 0;
+  document.getElementById('statChips').innerHTML = [
+    `<span class="chip">节点 <b>${graphData.nodes.length}</b></span>`,
+    `<span class="chip">引用 <b>${graphData.edges.length}</b></span>`,
+    `<span class="chip consensus">★ 共识域 <b>${cons}</b></span>`,
+  ].join('');
+
+  buildSim();
+  resize();
+  window.addEventListener('resize', resize);
+  bindInteraction();
+  bindButtons();
+  tick();
+}
+
+function buildSim() {
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  sim.nodes = graphData.nodes.map((n, i) => {
+    const angle = (i / Math.max(graphData.nodes.length, 1)) * Math.PI * 2;
+    const radius = Math.min(W, H) * 0.3;
+    return {
+      id: n.id, type: n.type, count: n.count, types: n.types, degree: n.degree,
+      x: W / 2 + Math.cos(angle) * (radius + Math.random() * 30),
+      y: H / 2 + Math.sin(angle) * (radius + Math.random() * 30),
+      vx: 0, vy: 0,
+    };
+  });
+  sim.nodeMap = {};
+  sim.nodes.forEach(n => sim.nodeMap[n.id] = n);
+  sim.edges = graphData.edges.filter(e => sim.nodeMap[e.source] && sim.nodeMap[e.target]);
+}
+
+function resize() {
+  const stage = document.getElementById('graphStage');
+  const rect = stage.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+const W = () => canvas.clientWidth;
+const H = () => canvas.clientHeight;
+
+// ── 仿真步进 ──
+function tick() {
+  if (sim.running) physics();
+  draw();
+  sim.animId = requestAnimationFrame(tick);
+}
+
+function physics() {
+  const { nodes, edges } = sim;
+  // 斥力
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i + 1; j < nodes.length; j++) {
+      const a = nodes[i], b = nodes[j];
+      let dx = a.x - b.x, dy = a.y - b.y;
+      let dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      // 节点半径（根据 count）影响最小间距
+      const minDist = nodeRadius(a) + nodeRadius(b) + 8;
+      let force = dist < minDist ? (minDist - dist) * 0.3 : 0;
+      force += sim.REPULSION / (dist * dist);
+      let fx = (dx / dist) * force, fy = (dy / dist) * force;
+      a.vx += fx; a.vy += fy; b.vx -= fx; b.vy -= fy;
+    }
+  }
+  // 弹簧
+  edges.forEach(e => {
+    const a = sim.nodeMap[e.source], b = sim.nodeMap[e.target];
+    let dx = b.x - a.x, dy = b.y - a.y;
+    let dist = Math.sqrt(dx * dx + dy * dy) || 1;
+    let force = (dist - sim.SPRING_LEN) * sim.SPRING;
+    let fx = (dx / dist) * force, fy = (dy / dist) * force;
+    a.vx += fx; a.vy += fy; b.vx -= fx; b.vy -= fy;
+  });
+  // 中心吸引 + 阻尼 + 位置
+  nodes.forEach(n => {
+    if (n === sim.dragNode) return; // 拖拽中的节点不参与物理
+    n.vx += (W() / 2 - n.x) * sim.CENTER;
+    n.vy += (H() / 2 - n.y) * sim.CENTER;
+    n.vx *= sim.DAMP; n.vy *= sim.DAMP;
+    n.x += n.vx; n.y += n.vy;
+  });
+}
+
+function nodeRadius(n) {
+  // 基于 count 缩放，最小 7，最大 18
+  return Math.min(18, 7 + Math.sqrt(n.count || 0) * 2.5);
+}
+
+// ── 绘制 ──
+function draw() {
+  ctx.clearRect(0, 0, W(), H());
+  ctx.save();
+  ctx.translate(sim.offsetX, sim.offsetY);
+  ctx.scale(sim.scale, sim.scale);
+
+  // 边
+  sim.edges.forEach(e => {
+    const a = sim.nodeMap[e.source], b = sim.nodeMap[e.target];
+    ctx.strokeStyle = '#cbd5e1';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash(e.source_type === 'manual' ? [5, 4] : []);
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // 箭头
+    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+    let dx = b.x - a.x, dy = b.y - a.y, len = Math.sqrt(dx * dx + dy * dy) || 1;
+    const ax = 5 * dx / len, ay = 5 * dy / len;
+    ctx.fillStyle = '#94a3b8';
+    ctx.beginPath();
+    ctx.moveTo(mx + ax, my + ay);
+    ctx.lineTo(mx - ay * 0.5, my + ax * 0.5);
+    ctx.lineTo(mx + ay * 0.5, my - ax * 0.5);
+    ctx.closePath();
+    ctx.fill();
+  });
+
+  // 节点
+  sim.nodes.forEach(n => {
+    const isCons = n.type === 'consensus';
+    const r = nodeRadius(n);
+    const isHover = n === sim.hoverNode;
+    // hover 光晕
+    if (isHover) {
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, r + 6, 0, Math.PI * 2);
+      ctx.fillStyle = isCons ? 'rgba(245,158,11,0.18)' : 'rgba(59,130,246,0.18)';
+      ctx.fill();
+    }
+    // 主体
+    ctx.beginPath();
+    ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = isCons ? '#f59e0b' : '#3b82f6';
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    // 共识域加星标
+    if (isCons) {
+      ctx.fillStyle = '#fff';
+      ctx.font = `bold ${Math.max(8, r * 0.8)}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('★', n.x, n.y);
+    }
+    // 标签
+    ctx.fillStyle = '#374151';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    let label = n.id;
+    if (label.length > 24) label = label.slice(0, 23) + '…';
+    ctx.fillText(label, n.x, n.y + r + 3);
+    // 计数小标
+    if (n.count > 0) {
+      ctx.fillStyle = '#9ca3af';
+      ctx.font = '9px sans-serif';
+      ctx.fillText(n.count + '条', n.x, n.y + r + 16);
+    }
+  });
+
+  ctx.restore();
+}
+
+// ── 屏幕坐标 → 画布坐标 ──
+function screenToWorld(sx, sy) {
+  return { x: (sx - sim.offsetX) / sim.scale, y: (sy - sim.offsetY) / sim.scale };
+}
+
+// ── 交互 ──
+function bindInteraction() {
+  canvas.addEventListener('mousemove', e => {
+    const rect = canvas.getBoundingClientRect();
+    const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+    if (sim.dragNode) {
+      // 拖拽节点
+      const w = screenToWorld(sx, sy);
+      sim.dragNode.x = w.x; sim.dragNode.y = w.y;
+      sim.dragNode.vx = 0; sim.dragNode.vy = 0;
+    } else if (sim.panning) {
+      // 平移画布
+      sim.offsetX += sx - sim.panStartX;
+      sim.offsetY += sy - sim.panStartY;
+      sim.panStartX = sx; sim.panStartY = sy;
+    } else {
+      // hover 检测
+      const w = screenToWorld(sx, sy);
+      let found = null;
+      for (const n of sim.nodes) {
+        if (Math.hypot(n.x - w.x, n.y - w.y) < nodeRadius(n) + 4) { found = n; break; }
+      }
+      sim.hoverNode = found;
+      canvas.style.cursor = found ? 'pointer' : 'crosshair';
+    }
+  });
+
+  canvas.addEventListener('mousedown', e => {
+    const rect = canvas.getBoundingClientRect();
+    const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+    const w = screenToWorld(sx, sy);
+    let found = null;
+    for (const n of sim.nodes) {
+      if (Math.hypot(n.x - w.x, n.y - w.y) < nodeRadius(n) + 4) { found = n; break; }
+    }
+    if (found) { sim.dragNode = found; }
+    else { sim.panning = true; sim.panStartX = sx; sim.panStartY = sy; canvas.style.cursor = 'move'; }
+  });
+
+  canvas.addEventListener('mouseup', () => {
+    sim.dragNode = null;
+    sim.panning = false;
+  });
+
+  canvas.addEventListener('mouseleave', () => {
+    sim.dragNode = null;
+    sim.panning = false;
+    sim.hoverNode = null;
+  });
+
+  canvas.addEventListener('click', e => {
+    if (sim.hoverNode) showDetail(sim.hoverNode);
+  });
+
+  // 滚轮缩放
+  canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+    const delta = e.deltaY < 0 ? 1.12 : 0.89;
+    const newScale = Math.max(0.3, Math.min(3, sim.scale * delta));
+    // 以鼠标为中心缩放
+    sim.offsetX = sx - (sx - sim.offsetX) * (newScale / sim.scale);
+    sim.offsetY = sy - (sy - sim.offsetY) * (newScale / sim.scale);
+    sim.scale = newScale;
+  }, { passive: false });
+}
+
+// ── 详情面板 ──
+async function showDetail(node) {
+  const panel = document.getElementById('detailPanel');
+  const content = document.getElementById('detailContent');
+  const isCons = node.type === 'consensus';
+  const tagCls = isCons ? 'tag-tier-consensus' : 'tag-tier-q4';
+  const tagLabel = isCons ? '★ 共识域' : '项目 (q4)';
+
+  // 关联节点（引用了它 / 被它引用）
+  const refs = graphData.edges
+    .filter(e => e.source === node.id || e.target === node.id)
+    .map(e => e.source === node.id ? e.target : e.source);
+
+  // type 分布
+  const typeRows = Object.entries(node.types || {})
+    .sort((a, b) => b[1] - a[1])
+    .map(([k, v]) => `<span class="tag ${typeTagClass(k)}">${esc(k)}</span> ×${v}`)
+    .join(' ');
+
+  content.innerHTML = `
+    <h4>${isCons ? '★ ' : ''}${esc(node.id)}</h4>
+    <span class="dt-tag ${tagCls}">${tagLabel}</span>
+    <div class="dt-row">记忆总数: <b>${node.count}</b></div>
+    <div class="dt-row">关联节点: <b>${refs.length}</b> 个</div>
+    ${typeRows ? `<div class="dt-row" style="margin-top:8px">${typeRows}</div>` : ''}
+    <div class="dt-mem-list" id="dtMemList"><div style="color:#9ca3af;font-size:12px">加载中...</div></div>
+  `;
+  panel.classList.add('show');
+
+  // 加载该节点记忆
+  try {
+    const mems = await fetchJSON('/api/memories?project=' + encodeURIComponent(node.id));
+    const list = document.getElementById('dtMemList');
+    if (mems.length === 0) {
+      list.innerHTML = '<div style="color:#9ca3af;font-size:12px">无记忆记录</div>';
+      return;
+    }
+    list.innerHTML = mems.map(m => `
+      <div class="dt-mem" data-obs="${esc(m.obs_uuid)}">
+        <div class="mt">${esc(m.title || '(无标题)')}</div>
+        <div class="ms">${esc(m.type)} · ${esc(fmtTime(m.updated_at))}</div>
+      </div>
+    `).join('');
+  } catch (err) {
+    document.getElementById('dtMemList').innerHTML = '<div style="color:#dc2626;font-size:12px">加载失败</div>';
+  }
+}
+
+document.getElementById('detailClose').onclick = () => {
+  document.getElementById('detailPanel').classList.remove('show');
+};
+
+// ── 按钮 ──
+function bindButtons() {
+  // 重新布局：随机重置位置，恢复仿真
+  document.getElementById('reLayoutBtn').onclick = () => {
+    const W = canvas.clientWidth, H = canvas.clientHeight;
+    sim.nodes.forEach((n, i) => {
+      const angle = (i / Math.max(sim.nodes.length, 1)) * Math.PI * 2;
+      n.x = W / 2 + Math.cos(angle) * (Math.min(W, H) * 0.3 + Math.random() * 40);
+      n.y = H / 2 + Math.sin(angle) * (Math.min(W, H) * 0.3 + Math.random() * 40);
+      n.vx = 0; n.vy = 0;
+    });
+    sim.scale = 1; sim.offsetX = 0; sim.offsetY = 0;
+    if (!sim.running) toggleSim();
+  };
+
+  // 暂停/继续仿真
+  document.getElementById('toggleSimBtn').onclick = toggleSim;
+}
+
+function toggleSim() {
+  sim.running = !sim.running;
+  document.getElementById('simLabel').textContent = sim.running ? '暂停仿真' : '继续仿真';
+  document.querySelector('#toggleSimBtn .icon').textContent = sim.running ? '⏸' : '▶';
+}
+
+// ── 启动 ──
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+{
+  "name": "qmem",
+  "version": "0.1.0",
+  "description": "跨会话 AI 记忆系统：动态记忆 + 跨项目共识 + 代码图谱查询",
+  "author": { "name": "cly" },
+  "license": "MIT",
+  "homepage": "https://github.com/cly/qmem"
+}

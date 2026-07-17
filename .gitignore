@@ -3,7 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# Databases
+# Databases (local runtime state)
 *.db
 *.db-journal
 *.db-wal
@@ -14,19 +14,18 @@ __pycache__/
 venv/
 ENV/
 
-# Large binaries/SDK downloads
-onnxruntime-win-x64-1.18.1.zip
-onnxruntime-linux-x64-1.18.1.tgz
+# Native CBM engine & embedding model weights (too large for GitHub — runtime downloads)
+*.exe
+*.onnx
+*.onnx_data
+bge-small-zh-v1.5-onnx/
 ort_sdk/
-onnxruntime-linux-x64-1.18.1/
+onnxruntime-win-x64-*.zip
+onnxruntime-linux-x64-*.tgz
 
-# Mojo build artifacts & release packages (Mojo implementation moved to qmem-mojo repo)
+# Release / build packages
 release/
 release_pkg/
-
-# Model files (too large for GitHub)
-bge-small-zh-v1.5-onnx/
-release/bge-small-zh-v1.5-onnx/
 
 # Local cache
 .cache/

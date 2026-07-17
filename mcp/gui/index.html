@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QMem 记忆列表</title>
+<link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+
+<header>
+  <span class="brand">QMem 记忆浏览器</span>
+  <span id="navMount"></span>
+</header>
+
+<div class="layout">
+  <!-- 左栏：只保留 Project -->
+  <aside>
+    <div class="filter-group"><h3>Project / 共识域</h3><div id="filterProject"></div></div>
+  </aside>
+
+  <!-- 右栏：工具栏 + 列表 -->
+  <section class="content-pane">
+    <!-- 工具栏：Tier / Type / 搜索 / 重置 / 结果计数 -->
+    <div class="filter-bar">
+      <div class="filter-group-inline">
+        <label>Tier</label>
+        <span class="filter-select"><select id="selTier"></select></span>
+      </div>
+      <div class="filter-group-inline">
+        <label>Type</label>
+        <span class="filter-select"><select id="selType"></select></span>
+      </div>
+      <div class="filter-group-inline">
+        <input type="text" class="search-box" id="searchBox" placeholder="搜索标题/内容...">
+      </div>
+      <div class="filter-group-inline" id="resultBar"></div>
+    </div>
+
+    <!-- 卡片列表（滚动区） -->
+    <div class="card-scroll" id="cardList"></div>
+  </section>
+</div>
+
+<script src="/assets/common.js"></script>
+<script src="/assets/markdown.js"></script>
+<script>
+// ── 状态 ──
+const state = {
+  filters: { project: '', tier: '', type: '', q: '' },
+  stats: null,
+  memories: [],
+};
+
+function buildQuery() {
+  const f = state.filters;
+  const p = new URLSearchParams();
+  if (f.project) p.set('project', f.project);
+  if (f.tier) p.set('tier', f.tier);
+  if (f.type) p.set('type', f.type);
+  if (f.q) p.set('q', f.q);
+  return p.toString();
+}
+
+async function loadStats() {
+  state.stats = await fetchJSON('/api/stats');
+  renderTopSelects();
+  renderProjectFilter();
+}
+
+async function loadMemories() {
+  const qs = buildQuery();
+  state.memories = await fetchJSON('/api/memories' + (qs ? '?' + qs : ''));
+  renderCards();
+}
+
+// ── 顶部下拉：Tier / Type ──
+function fillSelect(selId, items, dim) {
+  const sel = document.getElementById(selId);
+  let html = `<option value="">全部</option>`;
+  items.forEach(it => {
+    const label = it.k === '' ? '(空)' : it.k;
+    html += `<option value="${esc(it.k)}">${esc(label)} (${it.n})</option>`;
+  });
+  sel.innerHTML = html;
+  sel.value = state.filters[dim];
+  sel.onchange = () => { state.filters[dim] = sel.value; loadMemories(); };
+}
+
+function renderTopSelects() {
+  const s = state.stats;
+  if (!s) return;
+  fillSelect('selTier', s.tier.filter(x => x.k), 'tier');
+  fillSelect('selType', s.type, 'type');
+}
+
+// ── 左栏：Project 列表 ──
+function renderProjectFilter() {
+  const s = state.stats;
+  if (!s) return;
+  const projMap = {};
+  s.by_project.forEach(r => {
+    if (!projMap[r.k]) projMap[r.k] = { k: r.k, n: 0 };
+    projMap[r.k].n += r.n;
+  });
+  const items = Object.values(projMap).sort((a, b) => b.n - a.n);
+  const el = document.getElementById('filterProject');
+  const active = state.filters.project;
+  let html = `<div class="filter-item ${!active ? 'active' : ''}" data-dim="project" data-val=""><span>全部</span></div>`;
+  items.forEach(it => {
+    const label = it.k === '' ? '(空)' : esc(it.k);
+    html += `<div class="filter-item ${active === it.k ? 'active' : ''}" data-dim="project" data-val="${esc(it.k)}"><span>${label}</span><span class="count">${it.n}</span></div>`;
+  });
+  el.innerHTML = html;
+  el.querySelectorAll('.filter-item').forEach(node => {
+    node.onclick = () => {
+      state.filters.project = node.dataset.val;
+      loadMemories();
+      renderProjectFilter();
+    };
+  });
+}
+
+// ── 卡片列表（Markdown 渲染）──
+function renderCards() {
+  const list = state.memories;
+  const bar = document.getElementById('resultBar');
+  const container = document.getElementById('cardList');
+
+  let barHtml = `<button class="clear-btn" id="clearFiltersBtn">重置</button><span class="result-count-text">${list.length} 条结果</span>`;
+  bar.innerHTML = barHtml;
+  document.getElementById('clearFiltersBtn').onclick = clearAllFilters;
+
+  if (list.length === 0) { container.innerHTML = `<div class="empty">没有匹配的记忆</div>`; return; }
+
+  container.innerHTML = list.map(m => {
+    const tierCls = m.tier === 'consensus' ? 'tag-tier-consensus' : 'tag-tier-q4';
+    const tierLabel = m.tier === 'consensus' ? '★ consensus' : 'q4';
+    const classes = ['card'];
+    if (m.tier === 'consensus') classes.push('consensus');
+    const originTag = m.tier === 'consensus' && m.origin_project
+      ? `<span class="meta-sep">·</span><span>origin: ${esc(m.origin_project)}</span>` : '';
+    const topicTag = m.topic_key ? `<span class="meta-sep">·</span><span>${esc(m.topic_key)}</span>` : '';
+    return `
+      <div class="${classes.join(' ')}">
+        <div class="card-head">
+          <span class="card-project">[${esc(m.project)}]</span>
+          <span class="card-title">${esc(m.title || '(无标题)')}</span>
+        </div>
+        <div class="card-body">${renderMarkdown(m.content)}</div>
+        <div class="card-foot">
+          <span class="tag ${typeTagClass(m.type)}">${esc(m.type || 'manual')}</span>
+          <span class="tag ${tierCls}">${tierLabel}</span>
+          ${topicTag}${originTag}
+          <span class="meta-sep">·</span><span>${esc(fmtTime(m.updated_at))}</span>
+        </div>
+      </div>`;
+  }).join('');
+
+  container.querySelectorAll('.card').forEach(card => {
+    card.onclick = () => card.classList.toggle('expanded');
+  });
+}
+
+function clearAllFilters() {
+  state.filters = { project: '', tier: '', type: '', q: '' };
+  document.getElementById('searchBox').value = '';
+  ['selTier', 'selType'].forEach(id => document.getElementById(id).value = '');
+  loadMemories();
+  renderProjectFilter();
+}
+
+// ── 搜索 ──
+document.getElementById('searchBox').addEventListener('input',
+  debounce(e => { state.filters.q = e.target.value.trim(); loadMemories(); }, 300)
+);
+
+// ── 启动 ──
+document.getElementById('navMount').innerHTML = renderNav('list');
+(async () => { await loadStats(); await loadMemories(); })();
+</script>
+</body>
+</html>

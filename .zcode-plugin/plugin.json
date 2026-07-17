@@ -1,0 +1,24 @@
+{
+  "name": "qmem",
+  "version": "0.1.0",
+  "description": "跨会话 AI 记忆系统：动态记忆 + 跨项目共识 + 代码图谱查询",
+  "author": { "name": "cly" },
+  "license": "MIT",
+  "skills": "skills",
+  "mcpServers": {
+    "QMem": {
+      "command": "${user_config.python_path}",
+      "args": ["-u", "${ZCODE_PLUGIN_ROOT}\\mcp\\python\\mcp_server.py"],
+      "env": {
+        "PYTHONUTF8": "1"
+      }
+    }
+  },
+  "userConfig": {
+    "python_path": {
+      "type": "string",
+      "default": "C:\\Users\\Administrator\\AppData\\Local\\Programs\\Python\\Python313\\python.exe",
+      "description": "Python 3.10+ 解释器绝对路径（需预装 sqlite-vec/onnxruntime/tokenizers/numpy/huggingface-hub）"
+    }
+  }
+}

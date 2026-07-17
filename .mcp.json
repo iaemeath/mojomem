@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "QMem": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/mcp/python/start_python_mcp.bat",
+      "args": [],
+      "env": {
+        "PYTHONUTF8": "1",
+        "PYTHON": "C:\\Users\\Administrator\\AppData\\Local\\Programs\\Python\\Python313\\python.exe"
+      }
+    }
+  }
+}

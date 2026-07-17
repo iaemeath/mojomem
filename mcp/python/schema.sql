@@ -6,20 +6,16 @@
 CREATE TABLE IF NOT EXISTS memory_facts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     obs_uuid TEXT UNIQUE NOT NULL,
-    project TEXT NOT NULL DEFAULT '',     -- 动态记忆填自身项目名，共识填共识域名（如 _java-cloud-common）
+    project TEXT NOT NULL DEFAULT '',     -- 动态记忆填自身项目名，共识填共识域名（如 java-cloud-common）
     topic_key TEXT DEFAULT '',
     title TEXT DEFAULT '',
     content TEXT NOT NULL,
-    type TEXT DEFAULT 'manual',           -- decision/bugfix/reference/learning/manual
-    scope TEXT NOT NULL DEFAULT 'project',
+    type TEXT DEFAULT 'manual',           -- decision/bugfix/reference/learning/manual/progress
     tier TEXT NOT NULL DEFAULT 'q4',      -- q4(动态草稿) / consensus(跨项目共识)
     origin_project TEXT DEFAULT '',       -- promote 前的原始 project（供 demote 回溯；空=已融合多源，拒绝降级）
     content_hash TEXT DEFAULT '',         -- sha256(title+content)[:16]
-    session_id TEXT DEFAULT '',
-    pinned INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    review_after TIMESTAMP,
     deleted_at TIMESTAMP
 );
 
@@ -39,7 +35,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memory_facts_fts USING fts5(
 -- DDL 4: 项目→共识域 多对多关联表（虚拟外键引用图谱）
 CREATE TABLE IF NOT EXISTS project_refs (
     project TEXT NOT NULL,                -- 当前项目（如 bfo_zj_yxyd）
-    ref_project TEXT NOT NULL,            -- 依赖的共识域（如 _java-cloud-common）
+    ref_project TEXT NOT NULL,            -- 依赖的共识域（如 java-cloud-common）
     ref_source TEXT NOT NULL DEFAULT 'promote',  -- promote(自动建) / manual(add_consensus_ref 手动建)
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (project, ref_project)
@@ -84,11 +80,9 @@ END;
 CREATE INDEX IF NOT EXISTS idx_facts_project ON memory_facts(project);
 CREATE INDEX IF NOT EXISTS idx_facts_topic ON memory_facts(topic_key);
 CREATE INDEX IF NOT EXISTS idx_facts_type ON memory_facts(type);
-CREATE INDEX IF NOT EXISTS idx_facts_scope ON memory_facts(scope);
 CREATE INDEX IF NOT EXISTS idx_facts_tier ON memory_facts(tier);
 CREATE INDEX IF NOT EXISTS idx_facts_origin ON memory_facts(origin_project);
 CREATE INDEX IF NOT EXISTS idx_facts_deleted ON memory_facts(deleted_at);
 CREATE INDEX IF NOT EXISTS idx_facts_created ON memory_facts(created_at);
-CREATE INDEX IF NOT EXISTS idx_facts_pinned ON memory_facts(pinned);
 CREATE INDEX IF NOT EXISTS idx_refs_project ON project_refs(project);
 CREATE INDEX IF NOT EXISTS idx_refs_ref ON project_refs(ref_project);

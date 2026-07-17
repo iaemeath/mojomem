@@ -1,232 +1,130 @@
-# QMem: High-Performance Mojo MCP Memory Server
+# QMem
 
-[English](#english) | [中文](#中文)
+> 跨会话 AI 记忆系统 · 自托管 · 纯 Python · MCP Server
+>
+> Cross-session AI memory as an [MCP](https://modelcontextprotocol.io/) server — self-hosted, parasitic (no background daemon, no external API, fully local).
+
+[中文](#中文) | [English](#english)
+
+---
+
+## 中文
+
+### 这是什么
+
+QMem 是一个运行在 **stdio JSON-RPC** 上的 MCP 记忆服务器，给无状态的 LLM 会话（Claude Code / Cursor / ZCode / Claude Desktop）提供**跨会话、跨项目**的持久记忆：决策、踩坑、进度、共识。
+
+它**寄生**在宿主 Agent 进程里 —— 没有独立后台服务、不监听端口（可选 GUI 除外）、不调用任何外部 API。所有数据落在本地 SQLite。
+
+### 核心架构（V3.3）
+
+```
+LLM 客户端 (JSON-RPC over stdin/stdout)
+        │
+   QMemMCP  (mcp/python/mcp_server.py, Python 3.13)
+        ├─ BGEEmbedding      bge-small-zh-v1.5 ONNX, 512 维, 本地 CPU
+        ├─ HybridSearcher    RRF: BM25(FTS5) + cosine(sqlite-vec), k=60
+        ├─ CBMWrapper        子进程转发 → codebase-memory-mcp.exe（代码图谱）
+        ├─ core_memory.db    SQLite + sqlite-vec(vec0) + FTS5 + project_refs
+        ├─ call_log.db       独立 WAL, 工具调用审计（90 天自动清理）
+        └─ gui/server.py     只读可视化 HTTP :8765
+```
+
+**单表全家桶（single-table-all-in-one）**：动态记忆与共识记忆共用一张 `memory_facts` 表，用 `tier` 字段做逻辑隔离：
+
+- `tier = q4` —— 当前项目的草稿/踩坑/进度（项目私有）
+- `tier = consensus` —— 跨项目共享的稳定知识（共识域）
+
+**`project_refs` 虚拟引用**：consensus 记忆只存一份，各项目通过多对多引用表"看见"它；一处修改，所有引用方自动生效，无需复制。
+
+**两套知识，各司其职**：
+- **动态记忆**（决策/踩坑/进度）→ 存在 QMem，由 `mem_recall` 的 RRF 混合检索召回
+- **代码事实**（函数/类/调用图）→ **不存 QMem**，透明转发给 CBM（`search_graph` / `trace_path` / `get_architecture` / `detect_changes`）
+
+### V3.3 治理层
+
+- **写入闸门**：`mem_save` 先查项目 q4 最近邻，相似度 >0.85 返回候选，`force=true` 可绕过
+- **召回去重 + 质量信号**：`staleness` / `is_superseded` / `deduped`
+- **三步法配额**：top-50 候选 → 按 tier 分组 → 保底配额（q4≥2, consensus≥2）→ 剩余按 RRF 竞争
+- **摘要式召回**（`mem_context`）：返回预览，按需 `mem_get_full` 拉全文，防爆 token
+- **`mem_consolidate_project`**：检测项目内冗余簇
+
+共 **17 个本地工具**（4 写 / 5 读 / 8 治理）+ 透明转发的 CBM 工具。
+
+### 目录结构
+
+```
+qmem/
+├── .claude-plugin/plugin.json     # Claude Code 插件清单
+├── .zcode-plugin/plugin.json      # ZCode 插件清单
+├── .mcp.json                      # MCP server 配置
+├── package.json
+├── agents/acceptance-check.md     # 验收检查 agent
+├── skills/qmem-memory/SKILL.md    # 使用手册 skill
+└── mcp/
+    ├── python/                    # ★ 全部源码
+    │   ├── mcp_server.py          # 主服务器 (V3.3, 17 工具)
+    │   ├── search_rrf.py          # RRF 混合检索
+    │   ├── embedding.py           # BGE ONNX embedding
+    │   ├── cbm_wrapper.py         # CBM 子进程转发 (崩溃自愈+重试)
+    │   ├── init_project_context.py
+    │   ├── qmem_cli.py            # CLI 入口
+    │   ├── schema.sql             # DDL: 4 表 + 4 触发器 + 索引
+    │   ├── check_db.py
+    │   ├── requirements.txt
+    │   └── start_python_mcp.bat
+    ├── gui/                       # 零依赖只读可视化 (:8765)
+    ├── update/                    # V3.0/V3.2/V3.3 架构文档 + V2→V3 演进档案
+    ├── install.ps1
+    ├── WINDOWS_SETUP_GUIDE.md
+    └── mcp_config_example.json
+```
+
+> 体积大头是两个**运行时下载物**（已 gitignore，不入库）：
+> - `mcp/codebase-memory-mcp.exe` — PyInstaller 打包的 CBM 代码图谱引擎
+> - `mcp/bge-small-zh-v1.5-onnx/` — embedding 模型权重
+
+### 安装与运行
+
+**依赖**：Python 3.13，`pip install -r mcp/python/requirements.txt`
+（`sqlite-vec`、`onnxruntime`、`numpy`、`tokenizers`、`huggingface-hub`，均可离线安装）
+
+**首次部署**需补齐两个运行时下载物到 `mcp/` 下：
+1. BGE 模型：`huggingface_hub.snapshot_download("Xenova/bge-small-zh-v1.5", local_dir="mcp/bge-small-zh-v1.5-onnx")`
+2. CBM 引擎：从 [codebase-memory](https://github.com/craws/codebase-memory) 获取对应平台的 `codebase-memory-mcp` 二进制，放入 `mcp/`
+
+**启动**：`mcp/python/start_python_mcp.bat`（Windows）。在 MCP 客户端里把 `command` 指向它即可。详见 `mcp/WINDOWS_SETUP_GUIDE.md`。
+
+**插件形式**：本仓库同时是一个 Claude Code / ZCode 插件，安装后通过 `${CLAUDE_PLUGIN_ROOT}/mcp/python/start_python_mcp.bat` 自动注册。
+
+### 仓库关系
+
+- **`iaemeath/QMem`（本仓库）** —— 活跃的**纯 Python**实现，Windows 主力。
+- **`iaemeath/qmem-mojo`** —— 早期 Mojo + C-FFI 实现的**冻结快照**（性能更佳，主要面向 Linux），不再迭代，活跃版本以本仓库为准。
+
+### 致谢
+
+核心记忆表示与协议设计致敬开源项目 [codebase-memory](https://github.com/craws/codebase-memory)。
 
 ---
 
 ## English
 
-### 💡 Core Concept: The Four-Quadrant Memory Architecture
-`QMem` is a high-performance Model Context Protocol (MCP) memory server written in **pure Mojo**. Its core architectural concept is **The Four-Quadrant Developer Memory Model**, which categorizes and stores developer experiences, context, and code logic to allow LLMs to read and recall them with sub-millisecond latency.
+QMem is an MCP memory server (stdio JSON-RPC) giving stateless LLM sessions persistent, cross-session and cross-project memory — decisions, pitfalls, progress, and consensus knowledge. It is **parasitic**: no background daemon, no listened port (except an optional read-only GUI), no external API. All data stays in local SQLite.
 
-Unlike simple linear stores, it structures memory into a 2x2 layout separating **Active Context** (short-term) from **Stored Knowledge** (long-term).
+### Architecture (V3.3)
 
-```text
-                       [ Scope: Global Public (Global) ]
-                                       │
-        Quadrant 1: [Global Env Redlines - Static]  │  Quadrant 2: [Project Group Public Assets - Dynamic]
-        (Intranet registry, gateway, safety rules)  │  (Cross-project reusable solution patterns/bugfixes)
-        ──────────────────────────────────────────  │  ───────────────────────────────────────────────────
-        Carrier: D:\code\CLAUDE.md                  │  Carrier: D:\code\.assets\*.md modular files
-        Mode: Push (Passive forced injection)       │  Mode: Semi-Push / Explicit Pull recall
-                                                    │
- ───────────────────────────────────────────────────┼────────────────────────────────────────────────────► [ Mutation Frequency ]
-  (Hardly changed, resident at startup)             │                   (Dynamically appended)
-                                                    │
-        Quadrant 3: [Project Identity - Static]     │  Quadrant 4: [Project Dynamic Footprints - Dynamic]
-        (Local branch declaration, Vue version)     │  (Git branch history, handoffs, current bugs)
-        ──────────────────────────────────────────  │  ───────────────────────────────────────────────────
-        Carrier: Each project's CLAUDE.md           │  Carrier: Single-file SQLite (core_memory.db)
-        Mode: Push (Activated via path traversal)   │  Mode: Pull (Physical dual-channel hybrid search)
-                                                    │
-                       [ Scope: Project Private (Local) ]
-```
+Pure-Python server with a **single-table-all-in-one** design: dynamic and consensus memories share one `memory_facts` table, isolated logically by a `tier` field (`q4` = project-private drafts; `consensus` = cross-project shared). Cross-project sharing uses `project_refs` virtual references — a consensus fact lives in one place and is *seen* by every project that references it, so a single edit propagates with no duplication.
 
----
+Retrieval is **RRF hybrid** (BM25 over FTS5 + cosine over `sqlite-vec`, fused in one rank space, k=60) with a three-step tier quota. The V3.3 governance layer adds a write-similarity gate, recall dedup/quality signals, summarized recall, and in-project consolidation — 17 local tools in total, plus transparent forwarding of code-graph queries to the bundled CBM engine.
 
-### 🔄 Working Modes: Push, Pull & Query
-`QMem` operates in three distinct modes to coordinate memory exchange between the LLM and the repository:
+See `mcp/update/QMem-V3.3-Architecture.md` for the full reference.
 
-1. **Push (推送 / Save & Update)**:
-   - The LLM proactively saves important decisions, bug fixes, or architecture designs into Q4 Episodic Memory.
-   - When a specific keyword/topic is hit, it triggers an auto-upsert in SQLite.
-2. **Pull (拉取 / Semantic Recall)**:
-   - Queries are processed using Reciprocal Rank Fusion (RRF) hybrid search.
-   - The system performs FTS5 keyword matching and ONNX vector cosine similarity matching, prioritizing Q2 Consensus Memory (pinned entries).
-3. **Query (查询 & 探测 / Search & Context)**:
-   - Performs structural directory analysis (identity probing like Pom/Package descriptors) to build Q3 Structural Context.
-   - Allows strict filtering by scope (`project`, `personal`) and memory types.
+### Repos
 
----
+- **`iaemeath/QMem`** (this one) — active **pure-Python** implementation, primary on Windows.
+- **`iaemeath/qmem-mojo`** — frozen snapshot of the earlier Mojo + C-FFI implementation (faster, Linux-focused); no longer iterated.
 
-### 🛠️ Technology Stack
-- **Compiler**: Mojo 0.26.2 (Native C-compatible compilation).
-- **Inference Engine**: ONNX Runtime (BGE-Small-ZH-v1.5 model) bridged via native FFI.
-- **Database Engine**: SQLite3 with FTS5 and `sqlite-vec` extension (enabling direct embedding storage and Match queries).
+### License
 
----
-
-### 📜 Attribution & Design Philosophy
-`QMem` inherits its core protocol designs and semantic memory philosophy from the open-source [codebase-memory](https://github.com/craws/codebase-memory) project. 
-
-Our design philosophy centers around:
-- **Zero-Dependency High Performance**: Replacing Python's interpreter overhead and PyInstaller packaging bloat with native machine code.
-- **Cognitive Coexistence**: Mapping human-like memory quadrants (Short-term working memory vs Long-term episodic memory) to SQLite & Vector indices for semantic reasoning.
-
----
-
-### 📁 Project Structure
-```text
-QMem/
-├── src/                    # Mojo Source files
-│   ├── mcp_server.mojo     # Main entry point (JSON-RPC stdio loop)
-│   ├── tokenizer.mojo      # Native WordPiece tokenizer
-│   ├── sqlite_ffi.mojo     # SQLite3 FFI bindings
-│   ├── ort_ffi.mojo        # ONNX Runtime FFI bindings
-│   └── json_utils.mojo     # Native JSON parsing helpers
-├── shims/                  # C/C++ FFI shim source files
-│   ├── mj_sqlite.c         # SQLite double-pointer flattener shim
-│   └── ort_helper.cpp      # ONNX Runtime C FFI shim
-├── tests/                  # Mojo & Python test files
-│   ├── test_ort_ffi.mojo   # Test for ONNX inference
-│   ├── test_sqlite_ffi.mojo# Test for SQLite CRUD
-│   ├── test_mcp.py        # Integration test (JSON-RPC)
-│   └── ...
-├── release/                # Standalone portable release folder
-│   ├── qmem_mcp         # Compiled binary
-│   └── ...
-└── LICENSE                 # MIT License
-```
-
----
-
-### 🛠️ Build & Usage
-
-#### Compilation:
-1. Compile the shims:
-   ```bash
-   gcc -shared -fPIC -o libmj_sqlite.so shims/mj_sqlite.c -lsqlite3
-   g++ -shared -fPIC -o libort_helper.so shims/ort_helper.cpp -I./ort_sdk/include -L./ort_sdk/lib -lonnxruntime
-   ```
-2. Build the server binary:
-   ```bash
-   mojo build src/mcp_server.mojo -o qmem_mcp
-   ```
-
-#### Execution:
-Configure your MCP Client (e.g., Claude Desktop) to point to the `release/start_mcp.sh` script, which configures the shared libraries automatically.
-
----
----
-
-## 中文
-
-### 💡 核心思想：四象限记忆模型
-`QMem` 是一个使用 **纯 Mojo** 语言编写的高性能模型上下文协议 (MCP) 记忆服务器。其核心架构思想为 **四象限开发者记忆模型**。
-
-与传统的单维度线性存储不同，本项目将开发者的上下文在逻辑上划分为 **活跃上下文（短期）** 与 **持久知识（长期）** 的 2x2 四象限结构，以便大语言模型以低于 1 毫秒的延迟进行检索。
-
-```text
-                        【 作用范围：全局公共 (Global) 】
-                                         │
-        第一象限：【全局环境红线·静态】         │   第二象限：【跨项目共识域·动态】
-        (内网私服、总网关、全局安全硬指标)     │   (跨项目可复用的高阶解决方案、避坑Pattern)
-        ───────────────────────────────  │   ────────────────────────────────────────
-        载体：D:\code\CLAUDE.md          │   载体：单库 SQLite (tier='consensus')
-        模式：Push (被动强制注入)          │   模式：Pull (mem_context / search_rrf 自动加载)
-                                         │
- ─────────────────────────────────────────┼─────────────────────────────────────────►【 变动频率 】
-  (几乎不改，启动即常驻)                   │                  (随开发动态增量写入)
-                                         │
-        第三象限：【项目身份与硬约束·静态】     │   第四象限：【项目动态踩坑本·动态】
-        (绝对地域声明、Vue2/3死守、特定网关)   │   (Git分支足迹、临时会话交接、当下Bug)
-        ───────────────────────────────────│   ─────────────────────────────────────
-        载体：各子项目/CLAUDE.md          │   载体：单库 SQLite (core_memory.db)
-        模式：Push (路径穿透激活)          │   模式：Pull (物理级双路混合检索)
-                                         │
-                        【 作用范围：项目私有 (Local) 】
-```
-
----
-
-### 🔄 工作模式：推送、拉取与查询 (Push, Pull & Query)
-`QMem` 通过三种核心模式无缝调谐大模型与本地库的数据交换：
-
-1. **推送 (Push / 存储与更新)**:
-   - LLM 发现重要决策、Bug 修复或重构知识时，通过 `mem_save` 或 `mem_update` 主动写入第四象限。
-   - 对指定的主题（Topic Key）进行自动覆盖更新 (Upsert)。
-2. **拉取 (Pull / 语义召回)**:
-   - 检索时执行 RRF 混合检索算法，同时检索 FTS5 全文索引与 ONNX 向量相似度，执行"三步法配额截取"（保障 q4 与 consensus 记录的安全边界），统一在单个 rank 空间内混合召回。
-3. **查询 (Query / 探测与列表)**:
-   - 动态生成项目上下文 `mem_context`，并自动加载通过 `project_refs` 引用的共识域（Virtual Refs），无需手动查阅字典。
-
----
-
-### 🛠️ 技术栈与 V3.0 架构
-- **核心代理 (Hybrid Proxy)**：V3.0 (方案 10.1) 启用了混合代理架构。Mojo 负责底层极致冷启动的 SQLite FFI (`vec0`, `fts5`) 与 ONNX Runtime (BGE-Small-ZH-v1.5) 加载，而复杂的业务防腐层、RRF 排序、越权防护与脐带检查则安全地通过 Python FFI 透传给 Python 运行时处理。
-- **数据库**：SQLite3，单表架构 (`memory_facts`)，通过 `tier` 字段与 `project_refs` 表实现极简的物理隔离与逻辑引用，彻底解决上下文垃圾场问题。
-
----
-
-### 📜 开源声明与设计哲学
-本项目的核心记忆表示设计和协议标准借鉴并致敬了开源项目 [codebase-memory](https://github.com/craws/codebase-memory)。
-
-我们的设计哲学为：
-- **认知共生架构**：在底层数据库及向量架构中模拟人类脑部认知模式（短期工作记忆与长期情景记忆），增强模型的开发心智模型。
-
----
-
-### 📦 初始化与依赖下载 (首次安装)
-
-如果需要在新机器上从头部署（特别是使用 Python 回退版本时），你需要下载嵌入模型和 ONNX Runtime 环境。为了保持仓库整洁，我们不提供独立的脚本，你可以直接运行以下 Python 代码完成初始化：
-
-#### 1. 下载 BGE 向量模型
-你需要安装 `huggingface_hub`。这会将模型下载到 `bge-small-zh-v1.5-onnx` 目录中。
-```python
-import os
-from huggingface_hub import snapshot_download
-
-# 使用 HF 镜像站加速下载 (国内网络)
-os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
-
-print("Downloading ONNX model from hf-mirror...")
-snapshot_download(
-    repo_id="Xenova/bge-small-zh-v1.5", 
-    local_dir="bge-small-zh-v1.5-onnx", 
-    local_dir_use_symlinks=False
-)
-print("✅ Download complete.")
-```
-
-#### 2. 下载 ONNX Runtime SDK (C/C++ FFI 需要)
-如果你需要自己编译 Linux 版或准备跨平台环境，可以运行以下代码下载并解压：
-```python
-import urllib.request
-import tarfile
-import os
-import shutil
-
-os.makedirs("ort_sdk", exist_ok=True)
-linux_url = "https://github.com/microsoft/onnxruntime/releases/download/v1.18.1/onnxruntime-linux-x64-1.18.1.tgz"
-linux_tgz = "onnxruntime-linux-x64-1.18.1.tgz"
-
-print("Downloading ONNX Runtime Linux x64 SDK...")
-if not os.path.exists(linux_tgz):
-    urllib.request.urlretrieve(linux_url, linux_tgz)
-
-print("Extracting...")
-with tarfile.open(linux_tgz, "r:gz") as tar:
-    tar.extractall("ort_sdk")
-
-extracted_dir = os.path.join("ort_sdk", "onnxruntime-linux-x64-1.18.1")
-target_dir = os.path.join("ort_sdk", "linux")
-if os.path.exists(extracted_dir):
-    if os.path.exists(target_dir):
-        shutil.rmtree(target_dir)
-    os.rename(extracted_dir, target_dir)
-print("✅ Linux SDK setup complete in ort_sdk/linux.")
-```
-
----
-
-### 🐍 Python 回退版 (Windows / 跨平台)
-
-除了原生的 Mojo 实现（性能最佳，目前主要用于 Linux），本项目还提供了一套等效的 **Python 回退版**。这在 Mojo 暂未完全支持的平台（如原生 Windows）上非常有用。
-
-Python 版本的代码全部位于 `python/` 目录下。
-
-**启动方式：**
-- **Windows**: 双击或在配置中指定 `python/start_python_mcp.bat`
-- **Linux/macOS**: 执行 `python/start_python_mcp.sh`
-
-*注：由于 Windows 测试机正在使用该版本进行全面测试，请确保依赖的 `core_memory.db` 和 ONNX 模型在运行目录（如 `C:\QMem`）下存在，否则可能会触发错误。*
+MIT — see [LICENSE](LICENSE).

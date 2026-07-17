@@ -1,0 +1,8 @@
+{
+  "hash": "5c364c78639e63b079a799f351479b1fa3c34b23bed239b312ffdf5c47c20d20",
+  "marketplace": "cly-marketplace",
+  "plugin": "qmem",
+  "pluginVersion": "0.1.0",
+  "source": "filesystem",
+  "version": 1
+}
