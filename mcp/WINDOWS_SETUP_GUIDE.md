@@ -1,6 +1,6 @@
 # QMem Windows 内网测试机 MCP 配置指南
 
-> QMem **V4.0** — 三 MCP 正交架构（Y 方案落地，2026-07-20）
+> QMem **V4.1** — 三 MCP 正交架构（Y 方案落地）
 >
 > 架构：三个独立 MCP server，各管一个正交维度，各自独立进程/库/工具空间：
 > | MCP | 维度 | 职责 | 入口 | 库 |
@@ -9,7 +9,7 @@
 > | **DomainKG** | 认知（业务理解） | 电力调度业务概念（"纠偏字典"） | `mcp/domain-kg/server.py` | `domain_knowledge.db` |
 > | **codebase-memory** | 结构（代码实体） | 函数/调用关系/表字段 | `mcp/codebase-memory/codebase-memory-mcp.exe` | 独立索引库 |
 >
-> V3.3 的 consensus 共识机制（tier/origin_project/project_refs）已全部移除。跨项目技术规范改由全局 `~/.claude/CLAUDE.md` 硬编码承载。
+> V3.3 的 consensus 共识机制（project_refs 表）已移除；V4.1 进一步彻底删除 `tier`/`origin_project` 列（V4.0 仅弃用保留）。memory_facts 现为纯单层项目记忆。跨项目技术规范由全局 `~/.claude/CLAUDE.md` 硬编码承载。
 
 > ⚠️ **真实部署路径**：`D:\cly-marketplace\qmem\mcp\`（下文记作 `<QMem根>`）。
 > 早期文档/示例中的 `C:\QMem\` 是已废弃的占位部署路径，该目录已删除、资源已清空，不再使用。
@@ -129,14 +129,14 @@ DomainKG / CBM 不写调用日志。
 python D:\cly-marketplace\qmem\mcp\tools\check_db.py
 ```
 
-输出 total 记忆数、tier 分布（V4.0 恒为 q4）、project 分布、project_refs 表存在性核对（应为 absent）。
+输出 total 记忆数、project 分布、`project_refs` 表存在性核对（应为 absent）、`tier`/`origin_project` 列存在性核对（V4.1 应均为 absent）。
 
-## 6. 目录结构（V4.0 拆分后）
+## 6. 目录结构（V4.1 拆分后）
 
 ```
 mcp/
 ├── qmem/                      ← QMem MCP（项目记忆），自包含
-│   ├── server.py  start.bat  schema.sql  search_rrf.py  init_project_context.py  qmem_cli.py
+│   ├── server.py  start.bat  schema.sql  search_rrf.py  init_project_context.py
 │   ├── core_memory.db  call_log.db
 │   ├── embedding.py  bge-small-zh-v1.5-onnx/   ← 独立一份
 │   └── requirements.txt
@@ -146,11 +146,11 @@ mcp/
 │   ├── embedding.py  bge-small-zh-v1.5-onnx/   ← 独立一份
 │   └── requirements.txt
 ├── codebase-memory/           ← CBM MCP（代码事实）
-│   └── codebase-memory-mcp.exe
+│   ├── codebase-memory-mcp.exe
+│   └── install.ps1            ← CBM exe 安装器（独立工具，从 mcp/ 根移入）
 ├── gui/                       ← 可视化（属 QMem，只读两库）
-├── tools/                     ← 诊断/归档脚本（check_db / test_call_log / migrate_yplan）
-├── update/                    ← 架构演进文档
-└── install.ps1                ← CBM exe 安装器（独立工具）
+├── tools/                     ← 诊断脚本（check_db / test_call_log）
+└── update/                    ← 架构演进文档
 ```
 
 > MCP 客户端配置方法见本文档第 2 节（Cursor / Claude Desktop JSON 两种），不再单设示例文件。
